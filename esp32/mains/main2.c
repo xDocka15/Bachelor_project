@@ -16,10 +16,16 @@
 
 bool led = false;
 volatile bool x = false;
+volatile uint64_t value = 0;
 
 static bool IRAM_ATTR timer_group_isr_callback(void *args)
 {
     BaseType_t high_task_awoken = pdFALSE;
+
+    value = timer_group_get_counter_value_in_isr(TGROUP, TNUMBER);
+    value += timer_interval_sec * TIMER_SCALE;
+    timer_group_set_alarm_value_in_isr(TGROUP, TNUMBER, value * 2);
+    
     x = true;
     return high_task_awoken == pdTRUE; // return whether we need to yield at the end of ISR
    
@@ -48,7 +54,7 @@ void app_main(void)
         .counter_dir = TIMER_COUNT_UP,
         .counter_en = TIMER_PAUSE,
         .alarm_en = TIMER_ALARM_EN,
-        .auto_reload = 1,
+        .auto_reload = 0,
     };
 
     timer_init(TGROUP, TNUMBER, &config);
@@ -71,7 +77,7 @@ void app_main(void)
         {
             x = false;
         led = !led;
-            printf("test\n");
+            printf("%lld\n",value / TIMER_SCALE);
             if (led){
                 gpio_set_level(GPIO_OUTPUT_TEST, 0);
                 printf("off\n");

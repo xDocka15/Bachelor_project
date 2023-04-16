@@ -45,6 +45,8 @@
 #define TIMER_DIVIDER         (16)  //  Hardware timer clock divider
 #define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
 
+volatile uint64_t TVALUE = 0;
+
 typedef struct {
     int timer_group;
     int timer_idx;
@@ -64,17 +66,14 @@ typedef struct {
 static bool IRAM_ATTR timer_group_isr_callback(void *args)
 {
     BaseType_t high_task_awoken = pdFALSE;
-    example_timer_info_t *info = (example_timer_info_t *) args;
 
-    uint64_t timer_counter_value = timer_group_get_counter_value_in_isr(info->timer_group, info->timer_idx);
+    //TVALUE = timer_group_get_counter_value_in_isr(TGROUP, TNUMBER);
 
+    //gpio_set_level(GPIO_OUTPUT_MOS, 0);
+    //gpio_set_level(GPIO_OUTPUT_LED, 0);
+    //gpio_set_level(GPIO_OUTPUT_TEST, 0);
 
     return high_task_awoken == pdTRUE; // return whether we need to yield at the end of ISR
-
-    gpio_set_level(GPIO_OUTPUT_MOS, 0);
-    gpio_set_level(GPIO_OUTPUT_LED, 0);
-    gpio_set_level(GPIO_OUTPUT_TEST, 0);
-    printf("while loop\n");
 }
 
 /**
@@ -104,18 +103,11 @@ static void example_tg_timer_init(int group, int timer, bool auto_reload, int ti
     /* Configure the alarm value and the interrupt on alarm. */
     timer_set_alarm_value(group, timer, timer_interval_sec * TIMER_SCALE);
     timer_enable_intr(group, timer);
-
-    example_timer_info_t *timer_info = calloc(1, sizeof(example_timer_info_t));
     
-    timer_info->timer_group = group;
-    timer_info->timer_idx = timer;
-    timer_info->auto_reload = auto_reload;
-    timer_info->alarm_interval = timer_interval_sec;
-    
-    timer_isr_callback_add(group, timer, timer_group_isr_callback, timer_info, 0);
+    timer_isr_callback_add(group, timer, timer_group_isr_callback, NULL, 0);
 
-    timer_start(group, timer);
-    printf("timer init\n");
+    //timer_start(group, timer);
+    //printf("timer init\n");
 }
 
 
@@ -123,22 +115,33 @@ static xQueueHandle gpio_evt_queue = NULL;
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
-    //uint32_t gpio_num = (uint32_t) arg;
+    uint32_t gpio_num = (uint32_t) arg;
     xQueueSendFromISR(gpio_evt_queue, NULL, NULL);
 }
 
 static void gpio_task_example(void* arg)
 {
-    //uint32_t io_num;
+    uint32_t io_num;
     for(;;) {
-        if(xQueueReceive(gpio_evt_queue, NULL, portMAX_DELAY)) {
-            printf("gpio task\n");
-            gpio_set_level(GPIO_OUTPUT_MOS, 1);
-            gpio_set_level(GPIO_OUTPUT_LED, 1);
-            gpio_set_level(GPIO_OUTPUT_TEST, 1);
-            timer_set_counter_value(TGROUP, TNUMBER, 0);
-            timer_start(TGROUP, TNUMBER);
-            
+        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            if (gpio_get_level(GPIO_INPUT) == 1){
+                printf("inp pos edge\n");
+
+                timer_set_counter_value(TGROUP, TNUMBER, 0);
+                timer_start(TGROUP, TNUMBER);
+            } else {
+                printf("inp neg edge\n");
+                timer_pause(TGROUP, TNUMBER);
+                timer_get_counter_value(TGROUP, TNUMBER, TVALUE);
+                timer_set_counter_value(TGROUP, TNUMBER, 0);
+
+                timer_set_alarm_value(TGROUP, TNUMBER, TVALUE * 2);
+                timer_set_counter_value(TGROUP, TNUMBER, 0);
+                timer_start(TGROUP, TNUMBER);
+                gpio_set_level(GPIO_OUTPUT_MOS, 1);
+                gpio_set_level(GPIO_OUTPUT_LED, 1);
+                gpio_set_level(GPIO_OUTPUT_TEST, 1);
+            }
         }
     }
 }
@@ -161,7 +164,7 @@ void app_main(void)
     gpio_config(&io_conf);
 
     //interrupt of rising edge
-    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    io_conf.intr_type = GPIO_INTR_ANYEDGE;
     //bit mask of the pins, use GPIO4/5 here
     io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
     //set as input mode
