@@ -9,24 +9,28 @@
 #define TGROUP (TIMER_GROUP_0)
 #define TNUMBER (TIMER_0)
 #define TIMER_DIVIDER         (16)  //  Hardware timer clock divider
-#define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds
-#define timer_interval_sec 1
+#define TIMER_SCALE           (TIMER_BASE_CLK / TIMER_DIVIDER)  // convert counter value to seconds 5 000 000
+#define timer_interval_sec 0.5
 #define GPIO_OUTPUT_TEST    2 
 #define GPIO_OUTPUT_PIN_SEL  (1ULL<<GPIO_OUTPUT_TEST)
 
 bool led = false;
 volatile bool x = false;
 volatile uint64_t value = 0;
+volatile uint64_t tvalue = 0;
 
 static bool IRAM_ATTR timer_group_isr_callback(void *args)
 {
     BaseType_t high_task_awoken = pdFALSE;
+    x = true;
 
     value = timer_group_get_counter_value_in_isr(TGROUP, TNUMBER);
+    tvalue = value;
     value += timer_interval_sec * TIMER_SCALE;
-    timer_group_set_alarm_value_in_isr(TGROUP, TNUMBER, value * 2);
+    timer_group_set_alarm_value_in_isr(TGROUP, TNUMBER, value);
+
+
     
-    x = true;
     return high_task_awoken == pdTRUE; // return whether we need to yield at the end of ISR
    
 }
@@ -73,17 +77,31 @@ void app_main(void)
 
     while(1){
         vTaskDelay(50 / portTICK_RATE_MS);
+        //printf("%lld\n",value / timerval);
         if(x)
         {
             x = false;
-        led = !led;
-            printf("%lld\n",value / TIMER_SCALE);
+            led = !led;
+            uint64_t time = 0;
+            uint64_t bdiam = 0.02 * TIMER_SCALE;
+            uint64_t speed = 0;
+            uint64_t distance = 0.1 * TIMER_SCALE;
+            uint64_t delay = 0;
+            time = tvalue;
+            speed = TIMER_SCALE * bdiam / time;
+            delay = TIMER_SCALE * distance / speed;
+            float delayf = delay;
+            float speedf = speed;
+            printf("---------------------------\n");
+            printf(" TIMER: %lld | TIMER: %lld\n",tvalue, tvalue / TIMER_SCALE);
+            printf(" speed: %f | delay: %f\n",speedf / TIMER_SCALE, delayf / TIMER_SCALE);
+            printf("---------------------------\n");
             if (led){
                 gpio_set_level(GPIO_OUTPUT_TEST, 0);
-                printf("off\n");
+                //printf("off\n");
             } else {
                 gpio_set_level(GPIO_OUTPUT_TEST, 1);
-                printf("on\n");
+                //printf("on\n");
             }
             
         }

@@ -44,6 +44,13 @@ static xQueueHandle gpio_evt_queue = NULL;
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
+    gpio_set_level(GPIO_OUTPUT_MOS, 1);
+    gpio_set_level(GPIO_OUTPUT_LED, 1);
+    gpio_set_level(GPIO_OUTPUT_TEST, 1);
+    vTaskDelay(100 / portTICK_RATE_MS);
+    gpio_set_level(GPIO_OUTPUT_MOS, 0);
+    gpio_set_level(GPIO_OUTPUT_LED, 0);
+    gpio_set_level(GPIO_OUTPUT_TEST, 0);
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
 }
 
@@ -53,13 +60,7 @@ static void gpio_task_example(void* arg)
     for(;;) {
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
             //printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
-            gpio_set_level(GPIO_OUTPUT_MOS, 1);
-            gpio_set_level(GPIO_OUTPUT_LED, 1);
-            gpio_set_level(GPIO_OUTPUT_TEST, 1);
-            vTaskDelay(20 / portTICK_RATE_MS);
-            gpio_set_level(GPIO_OUTPUT_MOS, 0);
-            gpio_set_level(GPIO_OUTPUT_LED, 0);
-            gpio_set_level(GPIO_OUTPUT_TEST, 0);
+
             
         }
     }
