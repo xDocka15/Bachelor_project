@@ -46,19 +46,20 @@
 #define GPIO_INPUT_INTPIN_SEL  ((1ULL<<GPIO_INPUT_SENS))
 #define GPIO_INPUT_BUTTONPIN_SEL ((1ULL<<GPIO_INPUT_BUTTON))
 #define GPIO_INPUT_PIN_SEL      ((1ULL<<GPIO_INPUT_MODE_BUTTON) | (1ULL<<GPIO_INPUT_MODE_AUTO))
-#define GPIO_INPUT_BUTTON       2 // push button input pin
+#define GPIO_INPUT_BUTTON       2 // push button input pin 
 #define GPIO_INPUT_MODE_BUTTON  4 // button mode selection pin
 #define GPIO_INPUT_MODE_AUTO   16 // automatic mode selection pin
 #define ESP_INTR_FLAG_DEFAULT   0 
 #define coiluptime              0.020 // coil up time in seconds
 #define BUTTON_DELAY            0.5 // delay after coil is turned on
+#define FAN_PWM                 25
 
 // ADC
 #define DEFAULT_VREF            1100        //Use adc2_vref_to_gpio() to obtain a better estimate
 #define NO_OF_SAMPLES           64          //Multisampling
 #define TERM_BETA               3960.00
 #define TERM_T0                 25.00
-#define TERM_T1                 50.00
+#define TERM_T1                 40.00 // overload temp
 #define TERM_R0                 100000.00
 int TERM_R1 = TERM_R0*exp(TERM_BETA*(1/(TERM_T1+273) - 1/(TERM_T0+273))); // resistance for T1
 int adc_max_coil_voltage = 2000;
@@ -76,6 +77,7 @@ volatile bool TIMER_STATE = false;
 volatile bool LEDTEST = false;
 volatile bool TIMER_DELAY_STATE = false; //Indicates if delay after coil was turned on is counting
 volatile bool TEMP_OVERLOAD = false;
+volatile bool SPEED_PRINT = false;
 
 //ADC
 static esp_adc_cal_characteristics_t *adc_chars;
@@ -84,13 +86,15 @@ static esp_adc_cal_characteristics_t *adc_chars;
     static const adc_unit_t unit = ADC_UNIT_1; 
 
 #define ADC_1   (ADC_CHANNEL_6)
-#define ADC_2   (ADC_CHANNEL_7)
+#define ADC_2   (ADC_CHANNEL_4)//7
 bool ADC_SEL = true;
 uint32_t adc_1_reading = 0;
 uint32_t TERM_1_V = 0;
 int adc_interval = 0;
+uint64_t timeinsens_SC;
 volatile uint64_t speed_SC = 0;
-
+volatile uint64_t delay_SC = 0;
+volatile uint64_t delay2_SC = 0;
 
 
 static bool IRAM_ATTR timer_1_isr_callback(void *args)
@@ -115,7 +119,7 @@ static bool IRAM_ATTR timer_1_isr_callback(void *args)
         TIMER_DELAY_STATE = false;
         timer_pause(TGROUP, TNUMBER);
         timer_set_counter_value(TGROUP, TNUMBER, 0);
-        timer_group_set_alarm_value_in_isr(TGROUP, TNUMBER, 2 * TIMER_SCALE);
+        timer_group_set_alarm_value_in_isr(TGROUP, TNUMBER, 10 * TIMER_SCALE);
     }
     return high_task_awoken == pdTRUE; // return whether we need to yield at the end of ISR
 }
@@ -161,30 +165,37 @@ static void ADC_init(int channel)
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
-    uint64_t timeinsens_SC;
     //uint64_t time = 0;
     uint64_t bdiam_SC = 0.02 * TIMER_SCALE;
-    uint64_t distance_SC = 0.080 * TIMER_SCALE;
+    uint64_t distance_SC = 0.065 * TIMER_SCALE;
     uint64_t coillength_SC = 0.04 * TIMER_SCALE;
-    uint64_t delay_SC = 0;
-    uint64_t delay2_SC = 0;
+    //volatile uint64_t 
+    delay_SC = 0;
+    //volatile uint64_t 
+    delay2_SC = 0;
     if (!TIMER_DELAY_STATE && !TEMP_OVERLOAD) {
-        if (gpio_get_level(GPIO_INPUT_SENS) == 1 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) {
+        if (gpio_get_level(GPIO_INPUT_SENS) == 1 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) 
+        { // reset timeru pro mereni delky zakryti senzoru
             timer_pause(TGROUP, TNUMBER);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
-            timer_set_alarm_value(TGROUP, TNUMBER, 1 * TIMER_SCALE);
+            timer_set_alarm_value(TGROUP, TNUMBER, 10 * TIMER_SCALE); // pokud je senzor zakryt dele >> vyvolani deleni nulou
             timer_start(TGROUP, TNUMBER);
-        } else if (gpio_get_level(GPIO_INPUT_SENS) == 0 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) {
+        } else if (gpio_get_level(GPIO_INPUT_SENS) == 0 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) 
+        {
             timer_pause(TGROUP, TNUMBER);
             timer_get_counter_value(TGROUP, TNUMBER, &timeinsens_SC);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
+
             speed_SC = TIMER_SCALE * bdiam_SC / timeinsens_SC;
             delay_SC = TIMER_SCALE * distance_SC / speed_SC;
-            delay2_SC = delay_SC - coiluptime * TIMER_SCALE + (coillength_SC/speed_SC);
+            delay2_SC = delay_SC - coiluptime * TIMER_SCALE + (coillength_SC/speed_SC);   
+            SPEED_PRINT = true;
+
             timer_set_alarm_value(TGROUP, TNUMBER, delay2_SC);
             timer_start(TGROUP, TNUMBER);
             TIMER_STATE = true;
-        } else if (gpio_get_level(GPIO_INPUT_BUTTON) == 1 && gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 1) {
+        } else if (gpio_get_level(GPIO_INPUT_BUTTON) == 1 && gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 1) 
+        {
             timer_pause(TGROUP, TNUMBER);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
             timer_set_alarm_value(TGROUP, TNUMBER, distance_SC);
@@ -254,21 +265,21 @@ void app_main(void)
     while(1) {
         vTaskDelay(250 / portTICK_RATE_MS);
         
-        double speed = speed_SC;
-        if (speed > speed_max){
-            speed_max = speed;
-            
-        }
-        //printf("speed %f \t max speed %f \n", speed/TIMER_SCALE, speed_max/TIMER_SCALE);
-
-        bool SENS_PRINT = false;
-        if (SENS_PRINT){
-            if (gpio_get_level(GPIO_INPUT_SENS) == 1){
-                printf("in \n");
-            } else {
-                printf("out \n");
+        if (SPEED_PRINT)
+        {
+            SPEED_PRINT = false;
+            double raw = timeinsens_SC;
+            double speed = speed_SC;
+            double delay2 = delay2_SC;
+            double delay = delay_SC;
+            if (speed > speed_max)
+            {
+                speed_max = speed;
+                
             }
-        }   
+            printf("raw %f \t speed %f \t max speed %f \t delay %f \t delay2 %f \t dist1 %f \t dist2 %f\n",raw/TIMER_SCALE, speed/TIMER_SCALE, speed_max/TIMER_SCALE, delay/TIMER_SCALE, delay2/TIMER_SCALE, (speed/TIMER_SCALE)*(delay/TIMER_SCALE), (speed/TIMER_SCALE)*(delay2/TIMER_SCALE));   
+        }
+        
 
         if (LEDTEST){
             LEDTEST = false;
@@ -283,11 +294,11 @@ void app_main(void)
             if (ADC_SEL)
             {
                 adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_1);
-                printf(" TERM_1 %d\n",TERM_TEMP);
+                //printf(" TERM_2 %d\n",TERM_TEMP);
                 ADC_SEL = false;
             } else {
                 adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_2);
-                printf(" COIL TEMP %d\n",TERM_TEMP);
+                //printf(" COIL TEMP %d\n",TERM_TEMP);
                 ADC_SEL = true;
             }
             adc_max_coil_voltage = 1000.00*5*TERM_R1/(TERM_R1+56000);
@@ -301,6 +312,14 @@ void app_main(void)
                 TEMP_OVERLOAD = false;
                 gpio_set_level(GPIO_OUTPUT_LED_RED, 0);
             } 
+        }
+        if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0)// bez tohoto vyvola tlacitko delenu nulou pri MODE_AUTO
+        {
+            gpio_intr_disable(GPIO_INPUT_BUTTON);
+            //printf("intr off \n");
+        } else {
+            gpio_intr_enable(GPIO_INPUT_BUTTON);
+            //printf("intr on \n");
         }
     }
 }
