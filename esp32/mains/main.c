@@ -59,11 +59,15 @@
 #define NO_OF_SAMPLES           64          //Multisampling
 #define TERM_BETA               3960.00
 #define TERM_T0                 25.00
-#define TERM_T1                 40.00 // overload temp
+#define TERM_FAN_UP             35.00 // FAN ON above
+#define TERM_FAN_DOWN           32.00 // FAN OFF below
+#define TERM_CRIT               45 // COIL OFF above
+#define TERM_NONCRIT            40 // COIL ON below
 #define TERM_R0                 100000.00
-int TERM_R1 = TERM_R0*exp(TERM_BETA*(1/(TERM_T1+273) - 1/(TERM_T0+273))); // resistance for T1
+
 int adc_max_coil_voltage = 2000;
-int TERM_TEMP = 0;
+int TERM_TEMP_1 = 0;
+int TERM_TEMP_2 = 0;
 
 //
 // timer selection
@@ -90,6 +94,7 @@ static esp_adc_cal_characteristics_t *adc_chars;
 bool ADC_SEL = true;
 uint32_t adc_1_reading = 0;
 uint32_t TERM_1_V = 0;
+uint32_t TERM_2_V = 0;
 int adc_interval = 0;
 uint64_t timeinsens_SC;
 volatile uint64_t speed_SC = 0;
@@ -100,14 +105,16 @@ volatile uint64_t delay2_SC = 0;
 static bool IRAM_ATTR timer_1_isr_callback(void *args)
 {
     BaseType_t high_task_awoken = pdFALSE;
-    if (!TIMER_STATE && !TIMER_DELAY_STATE){ // output to low and set next callback to some long duration later will disable interrupt
+    if (!TIMER_STATE && !TIMER_DELAY_STATE)
+    { // output to low and enable delay
         TIMER_DELAY_STATE = true;
         gpio_set_level(GPIO_OUTPUT_MOS, 0);
         timer_pause(TGROUP, TNUMBER);
         timer_set_counter_value(TGROUP, TNUMBER, 0);
         timer_group_set_alarm_value_in_isr(TGROUP, TNUMBER, BUTTON_DELAY * TIMER_SCALE);
         timer_start(TGROUP, TNUMBER);
-    } else if (TIMER_STATE && !TIMER_DELAY_STATE){ // output pin to high and set next callback in "coiluptime" time
+    } else if (TIMER_STATE && !TIMER_DELAY_STATE)
+    { // output pin to high and set next callback in "coiluptime" time
         gpio_set_level(GPIO_OUTPUT_MOS, 1);
         timer_pause(TGROUP, TNUMBER);
         timer_set_counter_value(TGROUP, TNUMBER, 0);
@@ -115,11 +122,18 @@ static bool IRAM_ATTR timer_1_isr_callback(void *args)
         timer_start(TGROUP, TNUMBER);
         TIMER_STATE = false;
         LEDTEST = true;
-    } else if (TIMER_DELAY_STATE){
+
+        gpio_set_level(GPIO_OUTPUT_LED_GR, 0); // new_led_test 2/2
+
+    } else if (TIMER_DELAY_STATE) 
+    { //set next callback to some long duration better way would be disable interrupt
         TIMER_DELAY_STATE = false;
         timer_pause(TGROUP, TNUMBER);
         timer_set_counter_value(TGROUP, TNUMBER, 0);
         timer_group_set_alarm_value_in_isr(TGROUP, TNUMBER, 10 * TIMER_SCALE);
+
+        gpio_intr_enable(GPIO_INPUT_SENS);  //bug pokus o reseni druheho pulzu na sensoru_zaroven_s civkou 2/2
+
     }
     return high_task_awoken == pdTRUE; // return whether we need to yield at the end of ISR
 }
@@ -166,41 +180,47 @@ static void ADC_init(int channel)
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     //uint64_t time = 0;
-    uint64_t bdiam_SC = 0.02 * TIMER_SCALE;
-    uint64_t distance_SC = 0.065 * TIMER_SCALE;
-    uint64_t coillength_SC = 0.04 * TIMER_SCALE;
+    uint64_t bdiam_SC = 0.027 * TIMER_SCALE; // calculated 27
+    uint64_t distance_SC = 0.060 * TIMER_SCALE; // distance to to start pulse
+    //uint64_t coillength_SC = 0.04 * TIMER_SCALE; // half of the lenght
     //volatile uint64_t 
     delay_SC = 0;
     //volatile uint64_t 
     delay2_SC = 0;
-    if (!TIMER_DELAY_STATE && !TEMP_OVERLOAD) {
+    if (!TIMER_DELAY_STATE && !TEMP_OVERLOAD) 
+    {
         if (gpio_get_level(GPIO_INPUT_SENS) == 1 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) 
-        { // reset timeru pro mereni delky zakryti senzoru
+        { // (kulicka prisla do sensoru) reset timeru pro mereni delky zakryti senzoru
             timer_pause(TGROUP, TNUMBER);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
-            timer_set_alarm_value(TGROUP, TNUMBER, 10 * TIMER_SCALE); // pokud je senzor zakryt dele >> vyvolani deleni nulou
+            timer_set_alarm_value(TGROUP, TNUMBER, 10 * TIMER_SCALE); // bug pokud je senzor zakryt dele >> vyvolani deleni nulou
             timer_start(TGROUP, TNUMBER);
         } else if (gpio_get_level(GPIO_INPUT_SENS) == 0 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) 
-        {
+        { // (kulicka opustila sensor)
             timer_pause(TGROUP, TNUMBER);
             timer_get_counter_value(TGROUP, TNUMBER, &timeinsens_SC);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
 
             speed_SC = TIMER_SCALE * bdiam_SC / timeinsens_SC;
             delay_SC = TIMER_SCALE * distance_SC / speed_SC;
-            delay2_SC = delay_SC - coiluptime * TIMER_SCALE + (coillength_SC/speed_SC);   
+            delay2_SC = delay_SC - (coiluptime * TIMER_SCALE);// + (coillength_SC * TIMER_SCALE /speed_SC);   
             SPEED_PRINT = true;
-
+            //bug nestiha pri male rychlosti z duvodu spomaleni mezi sensorem-civkou, reseni: ruzne mody "převody" pro ruzne rychlosti kulicky
             timer_set_alarm_value(TGROUP, TNUMBER, delay2_SC);
             timer_start(TGROUP, TNUMBER);
             TIMER_STATE = true;
+
+            gpio_set_level(GPIO_OUTPUT_LED_GR, 1); // new_led_test 1/2
+            gpio_intr_disable(GPIO_INPUT_SENS); // bug pokus o reseni druheho pulzu na sensoru_zaroven_s civkou 1/2
+
         } else if (gpio_get_level(GPIO_INPUT_BUTTON) == 1 && gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 1) 
-        {
+        { // delay po spusteni civky
             timer_pause(TGROUP, TNUMBER);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
             timer_set_alarm_value(TGROUP, TNUMBER, distance_SC);
             timer_start(TGROUP, TNUMBER);
             TIMER_STATE = true;
+
         }
     }
 }
@@ -277,49 +297,64 @@ void app_main(void)
                 speed_max = speed;
                 
             }
-            printf("raw %f \t speed %f \t max speed %f \t delay %f \t delay2 %f \t dist1 %f \t dist2 %f\n",raw/TIMER_SCALE, speed/TIMER_SCALE, speed_max/TIMER_SCALE, delay/TIMER_SCALE, delay2/TIMER_SCALE, (speed/TIMER_SCALE)*(delay/TIMER_SCALE), (speed/TIMER_SCALE)*(delay2/TIMER_SCALE));   
+            printf("raw %lld \t time %f \t speed %f \t max speed %f \t delay %f \t delay2 %f \t dist1 %f \t dist2 %f\n",timeinsens_SC ,raw/TIMER_SCALE, speed/TIMER_SCALE, speed_max/TIMER_SCALE, delay/TIMER_SCALE, delay2/TIMER_SCALE, (speed/TIMER_SCALE)*(delay/TIMER_SCALE), (speed/TIMER_SCALE)*(delay2/TIMER_SCALE));   
         }
-        
 
-        if (LEDTEST){
-            LEDTEST = false;
-            gpio_set_level(GPIO_OUTPUT_LED_GR, 1);
-            vTaskDelay(250 / portTICK_RATE_MS);
-            gpio_set_level(GPIO_OUTPUT_LED_GR, 0);
-        }
+//        if (LEDTEST)
+//        {
+//            LEDTEST = false;
+//            gpio_set_level(GPIO_OUTPUT_LED_GR, 1);
+//            vTaskDelay(250 / portTICK_RATE_MS);
+//            gpio_set_level(GPIO_OUTPUT_LED_GR, 0);
+//        }
+
         adc_interval ++;
-        if (adc_interval == 5) 
+        if (adc_interval == 10) 
         {
             adc_interval = 0;
             if (ADC_SEL)
             {
                 adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_1);
-                //printf(" TERM_2 %d\n",TERM_TEMP);
+                TERM_1_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
+                int TERM_1_R1 = TERM_1_V/1000.00*56000.00/(5-TERM_1_V/1000.00);
+                TERM_TEMP_1 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_1_R1/TERM_R0))-273;
                 ADC_SEL = false;
             } else {
                 adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_2);
-                //printf(" COIL TEMP %d\n",TERM_TEMP);
+                TERM_2_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
+                int TERM_2_R1 = TERM_2_V/1000.00*56000.00/(5-TERM_2_V/1000.00);
+                TERM_TEMP_2 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_2_R1/TERM_R0))-273;
                 ADC_SEL = true;
             }
-            adc_max_coil_voltage = 1000.00*5*TERM_R1/(TERM_R1+56000);
-            TERM_1_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
-            int TERM_1_R1 = TERM_1_V/1000.00*56000.00/(5-TERM_1_V/1000.00);
-            TERM_TEMP = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_1_R1/TERM_R0))-273;
-            if (TERM_1_V < adc_max_coil_voltage){
-                TEMP_OVERLOAD = true;
+            printf(" COIL TEMP %d \t TERM_2 %d \n",TERM_TEMP_1,TERM_TEMP_2);
+            if (TERM_TEMP_1>TERM_FAN_UP || TERM_TEMP_2>TERM_FAN_UP)
+            {
                 gpio_set_level(GPIO_OUTPUT_LED_RED, 1);
-            } else {
-                TEMP_OVERLOAD = false;
+                gpio_set_level(GPIO_OUTPUT_FAN, 1);            
+            } else if (TERM_TEMP_1<TERM_FAN_DOWN && TERM_TEMP_2<TERM_FAN_DOWN) 
+            {
                 gpio_set_level(GPIO_OUTPUT_LED_RED, 0);
-            } 
+                gpio_set_level(GPIO_OUTPUT_FAN, 0);
+            } else if (TERM_TEMP_1>TERM_CRIT || TERM_TEMP_2>TERM_CRIT)
+            {
+                TEMP_OVERLOAD = true;
+            } else if (TERM_TEMP_1<TERM_NONCRIT && TERM_TEMP_2<TERM_NONCRIT) 
+            {
+                TEMP_OVERLOAD = false;
+            }
         }
-        if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0)// bez tohoto vyvola tlacitko delenu nulou pri MODE_AUTO
+        if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0)  //bug bez tohoto vyvola tlacitko deleni nulou pri MODE_AUTO
         {
             gpio_intr_disable(GPIO_INPUT_BUTTON);
-            //printf("intr off \n");
         } else {
             gpio_intr_enable(GPIO_INPUT_BUTTON);
-            //printf("intr on \n");
+        }
+
+        if (gpio_get_level(GPIO_INPUT_MODE_AUTO) == 0)  //bug reseni: sepnuti civky oklame sensor v MODE_BUTTON
+        {
+            gpio_intr_disable(GPIO_INPUT_SENS);
+        } else {
+            gpio_intr_enable(GPIO_INPUT_SENS);
         }
     }
 }
