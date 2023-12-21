@@ -105,6 +105,8 @@ extern double delay2;
 extern double delay;
 extern double speed_avg;
 
+volatile bool SENS_SEQUENCE;
+
 // webserver
 #define LED_GPIO_PIN 12 
 #define INDEX_HTML_PATH "/spiffs/index.html"

@@ -40,6 +40,8 @@ double speed2 = 0;
 double delay2 = 0;
 double delay = 0;
 double speed_avg = 0;
+
+ volatile bool SENS_SEQUENCE = true; // set
 //**************************************************************
 
 static const char *TAG = "main";
@@ -56,8 +58,8 @@ static void IRAM_ATTR mode_check(void* arg)
 
     if (gpio_get_level(GPIO_INPUT_MODE_AUTO) == 0)  //bug reseni: sepnuti civky oklame sensor v MODE_BUTTON
     {
-        gpio_intr_disable(GPIO_INPUT_SENS_1);
-        gpio_intr_disable(GPIO_INPUT_SENS_2);
+        //gpio_intr_disable(GPIO_INPUT_SENS_1);
+        //gpio_intr_disable(GPIO_INPUT_SENS_2);
     } else {
         gpio_intr_enable(GPIO_INPUT_SENS_1);
         gpio_intr_enable(GPIO_INPUT_SENS_2);
@@ -146,24 +148,27 @@ void IRAM_ATTR gpio_isr_handler(void* arg)
         { 
             TIMER_STATE = true;
             TIMER_READY = false;
+            LEDTEST = true;
             //INT_TEST = true;
             timer_pause(TGROUP, TNUMBER);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
             timer_set_alarm_value(TGROUP, TNUMBER, 0.005 * TIMER_SCALE);
             timer_start(TGROUP, TNUMBER);
-            LEDTEST = true;
-        } else if (gpio_get_level(GPIO_INPUT_SENS_1 ) == 1 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) 
+        }
+        if ((gpio_get_level(GPIO_INPUT_SENS_1 ) == 1)) 
         { // (kulicka prisla do sensoru) reset timeru pro mereni delky zakryti senzoru
+            SENS_SEQUENCE = false;
             timer_pause(TGROUP, TNUMBER);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
             timer_set_alarm_value(TGROUP, TNUMBER, 10 * TIMER_SCALE); // bug pokud je senzor zakryt dele >> vyvolani deleni nulou
             timer_start(TGROUP, TNUMBER);
-        } else if (gpio_get_level(GPIO_INPUT_SENS_2 ) == 1 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) { // kulicka opustila sensor
+        } else if ((gpio_get_level(GPIO_INPUT_SENS_2 ) == 1) && !SENS_SEQUENCE) { // kulicka opustila sensor
+            SENS_SEQUENCE = true;
+            SPEED_PRINT = true;
             delay_SC = 0; 
             delay2_SC = 0;
             timer_pause(TGROUP, TNUMBER);
             timer_get_counter_value(TGROUP, TNUMBER, &timeinsens_SC);
-            timer_set_counter_value(TGROUP, TNUMBER, 0);
             if (timeinsens_SC != 0)
             {
                 speed_SC = TIMER_SCALE * bdiam_SC / timeinsens_SC;
@@ -171,18 +176,19 @@ void IRAM_ATTR gpio_isr_handler(void* arg)
                 speed2_SC = 1.632*exp(-0.5 * dist_SC/TIMER_SCALE) * TIMER_SCALE;
                 speed_avg_SC = (speed_SC + speed2_SC)/2;
                 delay_SC = TIMER_SCALE * dist_to_coil_SC / speed_avg_SC;
-                if (delay_SC > coiluptime * TIMER_SCALE) // reseni bug vetrak spina sensor + omezeni max rychlosti
+                if ((delay_SC > coiluptime * TIMER_SCALE) && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1) // reseni bug vetrak spina sensor + omezeni max rychlosti
                 {
-                    delay2_SC = delay_SC - (coiluptime * TIMER_SCALE);// + (coillength_SC * TIMER_SCALE /speed_SC);              
-                    timer_set_alarm_value(TGROUP, TNUMBER, delay2_SC);
-                    timer_start(TGROUP, TNUMBER);
                     TIMER_STATE = true;
                     TIMER_READY = false;
+                    delay2_SC = delay_SC - (coiluptime * TIMER_SCALE);// + (coillength_SC * TIMER_SCALE /speed_SC);
+                    timer_set_counter_value(TGROUP, TNUMBER, 0);              
+                    timer_set_alarm_value(TGROUP, TNUMBER, delay2_SC);
+                    timer_start(TGROUP, TNUMBER);
                     gpio_set_level(GPIO_OUTPUT_LED_GR, 1); // new_led_test 1/2
                 } else {
                     INT_TEST = true;
-                }
-            SPEED_PRINT = true; 
+                    timer_start(TGROUP, TNUMBER);
+                } 
             }
             //gpio_intr_disable(GPIO_INPUT_SENS_1 ); // bug pokus o reseni druheho pulzu na sensoru_zaroven_s civkou 1/2
         }
