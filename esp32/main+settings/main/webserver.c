@@ -34,56 +34,8 @@ void initi_web_page_buffer(void)
     } else {
         ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
-
-    // memset((void *)index_html, 0, sizeof(index_html));
-    // struct stat st;
-    // if (stat(INDEX_HTML_PATH, &st))
-    // {
-    //     ESP_LOGE(TAG, "index.html not found");
-    //     return;
-    // }
-
-    // FILE *fp = fopen(INDEX_HTML_PATH, "r");
-    // if (fread(index_html, st.st_size, 1, fp) == 0)
-    // {
-    //     ESP_LOGE(TAG, "fread failed");
-    // }
-    // fclose(fp);
-
 }
 
-// esp_err_t root_handler(httpd_req_t *req)
-// {
-//     // Open the index.html file for reading
-//     const char* filename = INDEX_HTML_PATH; // Adjust the path as needed
-
-//     FILE* file = fopen(filename, "r");
-
-//     if (file == NULL) {
-//         ESP_LOGE(TAG, "Failed to open file: %s", filename); // Log an error message
-//         httpd_resp_send_404(req);
-//         return ESP_OK;
-//     }
-
-//     // Calculate the file size
-//     fseek(file, 0, SEEK_END);
-//     size_t file_size = ftell(file);
-//     fseek(file, 0, SEEK_SET);
-
-//     // Read the file content into a buffer
-//     char* file_content = (char*)malloc(file_size);
-//     fread(file_content, 1, file_size, file);
-
-//     // Send the file content as the HTTP response
-//     httpd_resp_set_type(req, "text/html");
-//     httpd_resp_send(req, file_content, file_size);
-
-//     // Clean up
-//     free(file_content);
-//     fclose(file);
-
-//     return ESP_OK;
-// }
 esp_err_t root_handler(httpd_req_t *req)
 {
 FILE *file = fopen(INDEX_HTML_PATH, "r");
@@ -123,7 +75,7 @@ FILE *file = fopen(INDEX_HTML_PATH, "r");
     return ESP_OK;
 }
 
-esp_err_t toggle_led_handler(httpd_req_t *req)
+esp_err_t button_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Switching LED");
 
@@ -133,8 +85,8 @@ esp_err_t toggle_led_handler(httpd_req_t *req)
 
     gpio_isr_handler(NULL);
 
-    char response[64];
-    snprintf(response, sizeof(response), "{\"ledState\": %f}", speed/TIMER_SCALE);
+    char response[128];
+    snprintf(response, sizeof(response), "{\"speed\": %f}", speed/TIMER_SCALE);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, response, strlen(response));
     return ESP_OK;
@@ -144,8 +96,8 @@ esp_err_t update_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Updating data");
     // Send the current LED state as a JSON response
-    char response[64];
-    snprintf(response, sizeof(response), "{\"ledState\": %f, \"TERM_TEMP_1\": %d, \"TERM_TEMP_2\": %d }", speed/TIMER_SCALE, TERM_TEMP_1, TERM_TEMP_2);
+    char response[128];
+    snprintf(response, sizeof(response), "{\"speed\": %f, \"TERM_TEMP_1\": %d, \"TERM_TEMP_2\": %d, \"EN_BUTTON\": %d }", speed/TIMER_SCALE, TERM_TEMP_1, TERM_TEMP_2, EN_BUTTON);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, response, strlen(response));
     return ESP_OK;
@@ -169,13 +121,13 @@ void start_webserver(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &root_uri);
-        static const httpd_uri_t toggle_led_uri = {
-            .uri       = "/led",
+        static const httpd_uri_t button_uri = {
+            .uri       = "/button",
             .method    = HTTP_GET,
-            .handler   = toggle_led_handler,
+            .handler   = button_handler,
             .user_ctx  = NULL
         };
-        httpd_register_uri_handler(server, &toggle_led_uri);
+        httpd_register_uri_handler(server, &button_uri);
         static const httpd_uri_t update_uri = {
             .uri       = "/upd",
             .method    = HTTP_GET,

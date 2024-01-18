@@ -42,11 +42,12 @@ double delay = 0;
 double speed_avg = 0;
 
  volatile bool SENS_SEQUENCE = true; // set
+ volatile bool EN_BUTTON = false;
 //**************************************************************
 
 static const char *TAG = "main";
 
-static void IRAM_ATTR mode_check(void* arg)
+static void IRAM_ATTR mode_check(void)
 {
     //SPEED_PRINT = true;
     if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0)  //bug bez tohoto vyvola tlacitko deleni nulou pri MODE_AUTO
@@ -64,7 +65,11 @@ static void IRAM_ATTR mode_check(void* arg)
         gpio_intr_enable(GPIO_INPUT_SENS_1);
         gpio_intr_enable(GPIO_INPUT_SENS_2);
     }
-
+    if (gpio_get_level(GPIO_INPUT_MODE_WIFI) == 1){
+        EN_BUTTON = true;
+    } else {
+        EN_BUTTON = false;
+    }
 }
 
 static bool IRAM_ATTR timer_1_isr_callback(void *args)
@@ -215,12 +220,15 @@ void app_main(void)
     // io_conf.pin_bit_mask = GPIO_INPUT_DISABLE_SEL;
     // gpio_config(&io_conf);
     
+    mode_check();
+    
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     gpio_isr_handler_add(GPIO_INPUT_SENS_1 , gpio_isr_handler, NULL);
     gpio_isr_handler_add(GPIO_INPUT_SENS_2 , gpio_isr_handler, NULL);
     gpio_isr_handler_add(GPIO_INPUT_BUTTON , gpio_isr_handler, NULL);
     gpio_isr_handler_add(GPIO_INPUT_MODE_BUTTON , mode_check, NULL);
     gpio_isr_handler_add(GPIO_INPUT_MODE_AUTO , mode_check, NULL);
+    gpio_isr_handler_add(GPIO_INPUT_MODE_WIFI , mode_check, NULL);
 
     gpio_set_level(GPIO_OUTPUT_MOS, 0);
     gpio_set_level(GPIO_OUTPUT_LED_GR, 0);

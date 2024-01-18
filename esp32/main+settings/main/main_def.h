@@ -113,6 +113,7 @@ volatile bool SENS_SEQUENCE;
 char index_html[0x1000];
 extern volatile int number;
 extern volatile int led_state;
+volatile bool EN_BUTTON;
 void wifi_init_softap(void);
 void initi_web_page_buffer(void);
 void start_webserver(void);
