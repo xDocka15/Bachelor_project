@@ -121,6 +121,7 @@ void start_webserver(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &root_uri);
+
         static const httpd_uri_t button_uri = {
             .uri       = "/button",
             .method    = HTTP_GET,

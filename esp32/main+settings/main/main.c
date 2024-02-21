@@ -1,4 +1,5 @@
 #include "main_def.h"
+#include "lvgl.h"
 
 // sepnuti vetraku 500 us pulse na sensoru - reseni v preruseni
 

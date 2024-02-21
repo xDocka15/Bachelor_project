@@ -70,9 +70,9 @@ extern int INT_TEST_COUNTER;
 #define NO_OF_SAMPLES           64          //Multisampling
 #define TERM_BETA               3960.00
 #define TERM_T0                 25.00
-#define TERM_FAN_UP             35.00 // FAN ON above
-#define TERM_FAN_DOWN           32.00 // FAN OFF below
-#define TERM_CRIT               45.00 // COIL OFF above
+#define TERM_FAN_UP             35.00 // FAN ON above also in index.html
+#define TERM_FAN_DOWN           32.00 // FAN OFF below also in index.html
+#define TERM_CRIT               45.00 // COIL OFF above also in index.html
 #define TERM_NONCRIT            40 // COIL ON below
 #define TERM_R0                 100000.00
 #define ADC_1                   (ADC_CHANNEL_6)
