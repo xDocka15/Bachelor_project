@@ -1,5 +1,10 @@
 #include "main_def.h"
-#include "lvgl.h"
+#include "sh1107.h"
+#include "oled.h"
+#include "webserver.h"
+#include "ADC.h"
+
+
 
 // sepnuti vetraku 500 us pulse na sensoru - reseni v preruseni
 
@@ -37,39 +42,60 @@ double speed_max = 0.01;
 
 double raw = 0;
 double speed = 0;
+double prev_speed = 0;
 double speed2 = 0;
 double delay2 = 0;
 double delay = 0;
 double speed_avg = 0;
+int speed_reset_counter = 0;
 
  volatile bool SENS_SEQUENCE = true; // set
  volatile bool EN_BUTTON = false;
 //**************************************************************
 
+enum OPERATION MODE;
+
+enum ball_position position;
+
 static const char *TAG = "main";
 
-static void IRAM_ATTR mode_check(void)
+static void IRAM_ATTR mode_check(void* arg)   //****************************************** predelat na switch case s analog ctenim 1 pinu
 {
     //SPEED_PRINT = true;
-    if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0)  //bug bez tohoto vyvola tlacitko deleni nulou pri MODE_AUTO
-    {
-        gpio_intr_disable(GPIO_INPUT_BUTTON);
-    } else {
-        gpio_intr_enable(GPIO_INPUT_BUTTON);
-    }
+    // if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0)  //bug bez tohoto vyvola tlacitko deleni nulou pri MODE_AUTO
+    // {
+    //     gpio_intr_disable(GPIO_INPUT_BUTTON);
+    // } else {
+    //     gpio_intr_enable(GPIO_INPUT_BUTTON);
+    // }
 
-    if (gpio_get_level(GPIO_INPUT_MODE_AUTO) == 0)  //bug reseni: sepnuti civky oklame sensor v MODE_BUTTON
-    {
-        //gpio_intr_disable(GPIO_INPUT_SENS_1);
-        //gpio_intr_disable(GPIO_INPUT_SENS_2);
-    } else {
-        gpio_intr_enable(GPIO_INPUT_SENS_1);
-        gpio_intr_enable(GPIO_INPUT_SENS_2);
-    }
-    if (gpio_get_level(GPIO_INPUT_MODE_WIFI) == 1){
-        EN_BUTTON = true;
-    } else {
+    // if (gpio_get_level(GPIO_INPUT_MODE_AUTO) == 0)  //bug reseni: sepnuti civky oklame sensor v MODE_BUTTON
+    // {
+    //     //gpio_intr_disable(GPIO_INPUT_SENS_1);
+    //     //gpio_intr_disable(GPIO_INPUT_SENS_2);
+    // } else {
+    //     gpio_intr_enable(GPIO_INPUT_SENS_1);
+    //     gpio_intr_enable(GPIO_INPUT_SENS_2);
+    // }
+    // if (gpio_get_level(GPIO_INPUT_MODE_WIFI) == 1){
+    //     EN_BUTTON = true;
+    // } else {
+    //     EN_BUTTON = false;
+    // }
+
+    if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 1 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 0 && gpio_get_level(GPIO_INPUT_MODE_WIFI) == 0){
+        MODE = BUTTON;
+        gpio_intr_enable(GPIO_INPUT_BUTTON);
         EN_BUTTON = false;
+    } else if (gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0 && gpio_get_level(GPIO_INPUT_MODE_AUTO) == 1 && gpio_get_level(GPIO_INPUT_MODE_WIFI) == 0) {
+        MODE = AUTO;
+        gpio_intr_disable(GPIO_INPUT_BUTTON);
+        EN_BUTTON = false;
+    } else { // button = 0 auto = 0 wifi = 1
+        MODE = WIFI;
+        EN_BUTTON = true;
+        gpio_intr_disable(GPIO_INPUT_BUTTON);
+
     }
 }
 
@@ -90,6 +116,7 @@ static bool IRAM_ATTR timer_1_isr_callback(void *args)
 
     } else if (!TIMER_STATE && !TIMER_DELAY_STATE)
     { // output to low and enable delay
+        position = after_coil;
         TIMER_DELAY_STATE = true;
         gpio_set_level(GPIO_OUTPUT_MOS, 0);
         timer_pause(TGROUP, TNUMBER);
@@ -98,6 +125,7 @@ static bool IRAM_ATTR timer_1_isr_callback(void *args)
         timer_start(TGROUP, TNUMBER);
     } else if (TIMER_DELAY_STATE) 
     { //set next callback to some long duration better way would be disable interrupt
+        position = other;
         TIMER_DELAY_STATE = false;
         TIMER_READY = true;
         timer_pause(TGROUP, TNUMBER);
@@ -139,19 +167,18 @@ static void example_tg_timer_init(int group, int timer, bool auto_reload, int ti
     timer_isr_callback_add(group, timer, timer_1_isr_callback, NULL, 0);
 }
 
-static void ADC_init(int channel)
-{
-    adc1_config_width(width);
-    adc1_config_channel_atten(channel, atten);
-    esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adc_chars);
-}
+volatile int level = 0;
+volatile int pin = 0;
 
 void IRAM_ATTR gpio_isr_handler(void* arg)
 {
+    pin = (uint32_t) arg;
+    INT_TEST = true;
+
     if (!TIMER_DELAY_STATE && !TEMP_OVERLOAD && TIMER_READY) 
     {
         if ((gpio_get_level(GPIO_INPUT_BUTTON) == 1 && gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 1) || (gpio_get_level(GPIO_INPUT_MODE_WIFI) == 1 && gpio_get_level(GPIO_INPUT_MODE_BUTTON) == 0))
-        { 
+        { // nekdy sepne preruseni ze sensoru pokude je mode nasataven na wifi
             TIMER_STATE = true;
             TIMER_READY = false;
             LEDTEST = true;
@@ -163,14 +190,16 @@ void IRAM_ATTR gpio_isr_handler(void* arg)
         }
         if ((gpio_get_level(GPIO_INPUT_SENS_1 ) == 1)) 
         { // (kulicka prisla do sensoru) reset timeru pro mereni delky zakryti senzoru
+            position = between_sensors;
             SENS_SEQUENCE = false;
             timer_pause(TGROUP, TNUMBER);
             timer_set_counter_value(TGROUP, TNUMBER, 0);
             timer_set_alarm_value(TGROUP, TNUMBER, 10 * TIMER_SCALE); // bug pokud je senzor zakryt dele >> vyvolani deleni nulou
             timer_start(TGROUP, TNUMBER);
         } else if ((gpio_get_level(GPIO_INPUT_SENS_2 ) == 1) && !SENS_SEQUENCE) { // kulicka opustila sensor
+            position = before_coil;
             SENS_SEQUENCE = true;
-            SPEED_PRINT = true;
+            //SPEED_PRINT = true;
             delay_SC = 0; 
             delay2_SC = 0;
             timer_pause(TGROUP, TNUMBER);
@@ -192,7 +221,7 @@ void IRAM_ATTR gpio_isr_handler(void* arg)
                     timer_start(TGROUP, TNUMBER);
                     gpio_set_level(GPIO_OUTPUT_LED_GR, 1); // new_led_test 1/2
                 } else {
-                    INT_TEST = true;
+                    //INT_TEST = true;
                     timer_start(TGROUP, TNUMBER);
                 } 
             }
@@ -201,35 +230,137 @@ void IRAM_ATTR gpio_isr_handler(void* arg)
     }
 }
 
+// static void ADC_init(int channel)
+// {
+//     adc1_config_width(width);
+//     adc1_config_channel_atten(channel, atten);
+//     esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adc_chars);
+// }
+
+// static void ADC_measure_temperature(void){
+//     adc_interval ++;
+//     if (adc_interval == 20) 
+//     {
+//         adc_interval = 0;
+//         if (ADC_SEL)
+//         {
+//             adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_1);
+//             TERM_1_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
+//             int TERM_1_R1 = TERM_1_V/1000.00*56000.00/(5-TERM_1_V/1000.00);
+//             TERM_TEMP_1 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_1_R1/TERM_R0))-273;
+//             ADC_SEL = false;
+//         } else {
+//             adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_2);
+//             TERM_2_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
+//             int TERM_2_R1 = TERM_2_V/1000.00*56000.00/(5-TERM_2_V/1000.00);
+//             TERM_TEMP_2 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_2_R1/TERM_R0))-273;
+//             ADC_SEL = true;
+//         }
+//         // if (PRINT_TEMP){
+//         //     printf(" COIL TEMP %d \t TERM_2 %d \n",TERM_TEMP_1,TERM_TEMP_2);
+//         // }
+//         if (TERM_TEMP_1 > TERM_FAN_UP || TERM_TEMP_2 > TERM_FAN_UP)
+//         {
+//             //ESP_LOGI(TAG, "fan up");
+//             gpio_set_level(GPIO_OUTPUT_FAN, 1);            
+//         } else if (TERM_TEMP_1 < TERM_FAN_DOWN && TERM_TEMP_2 < TERM_FAN_DOWN) 
+//         {
+//             //ESP_LOGI(TAG, "fan down");
+//             gpio_set_level(GPIO_OUTPUT_FAN, 0);
+//         }
+//         if (TERM_TEMP_1 > TERM_CRIT || TERM_TEMP_2 > TERM_CRIT)
+//         {
+//             //ESP_LOGI(TAG, "coil down");
+//             TEMP_OVERLOAD = true;
+//             gpio_set_level(GPIO_OUTPUT_LED_RED, 1);
+//         } else if (TERM_TEMP_1 < TERM_NONCRIT && TERM_TEMP_2 < TERM_NONCRIT) 
+//         {
+//             //ESP_LOGI(TAG, "coil up");
+//             TEMP_OVERLOAD = false;
+//             gpio_set_level(GPIO_OUTPUT_LED_RED, 0);
+//         }
+//     }
+// }
+
+// static void oled_init(void){
+//     i2c_master_init(&dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_I2C_RESET_GPIO);
+//     sh1107_init(&dev, 130, 64);
+//     sh1107_contrast(&dev, 0xff);	
+//     sh1107_clear_screen(&dev, false);
+//     sh1107_direction(&dev, DIRECTION180);
+// }
+
+// static void oled_drawstats(enum OPERATION MODE){
+//
+//     char string_num[12];
+//     int oled_speed = speed/TIMER_SCALE*3.6;
+//     snprintf(string_num, sizeof(string_num), "%d", oled_speed);
+//     char string_txt[32] = "Speed: ";
+//     strcat(string_txt, string_num);
+//     strcat(string_txt, " km/h");
+//     sh1107_display_text(&dev, 1, 1, string_txt, 16, false);
+//  
+//     snprintf(string_num, sizeof(string_num), "%d", TERM_TEMP_2);
+//     strcpy(string_txt, "Board: ");
+//     strcat(string_txt, string_num);
+//     strcat(string_txt, " 'C");
+//     sh1107_display_text(&dev, 3, 1, string_txt, 20, false);
+//
+//     snprintf(string_num, sizeof(string_num), "%d", TERM_TEMP_1);
+//     strcpy(string_txt, "Coil:  ");
+//     strcat(string_txt, string_num);
+//     strcat(string_txt, " 'C");
+//     sh1107_display_text(&dev, 5, 1, string_txt, 20, false);
+//
+//     switch (MODE){
+//         case BUTTON:
+//             sh1107_display_text(&dev, 7, 3, "MODE: BUTTON ", 16, false);
+//             // printf("button\n");
+//         break;
+//         case AUTO:
+//             sh1107_display_text(&dev, 7, 3, "MODE: AUTO  ", 16, false);
+//             // printf("auto\n");
+//         break;
+//         case WIFI:
+//             sh1107_display_text(&dev, 7, 3, "MODE: WIFI  ", 16, false);
+//             // printf("wifi\n");
+//         break;
+//     }
+// }
+
+// static void oled_drawloading(void){
+//     sh1107_bitmaps(&dev, 0, -2, logoVUT, 128, 64, false);
+// }
+
 void app_main(void)
 {
 //GPIO
-    gpio_config_t io_conf = {};
-        io_conf.intr_type = GPIO_INTR_DISABLE;
-        io_conf.mode = GPIO_MODE_OUTPUT;
-        io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-        io_conf.pull_down_en = 0;
-        io_conf.pull_up_en = 0;
-    gpio_config(&io_conf);
-        io_conf.intr_type = GPIO_INTR_POSEDGE;
-        io_conf.pin_bit_mask = GPIO_INPUT_POSEDGE_SEL;
-        io_conf.mode = GPIO_MODE_INPUT;
-        io_conf.pull_down_en = 1;
-        io_conf.pull_up_en = 0;
-    gpio_config(&io_conf);
-    // io_conf.intr_type = GPIO_INTR_DISABLE;
-    // io_conf.pin_bit_mask = GPIO_INPUT_DISABLE_SEL;
-    // gpio_config(&io_conf);
+    gpio_config_t gpio_out = {};
+        gpio_out.intr_type = GPIO_INTR_DISABLE;
+        gpio_out.mode = GPIO_MODE_OUTPUT;
+        gpio_out.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+        gpio_out.pull_down_en = 0;
+        gpio_out.pull_up_en = 0;
+
+    gpio_config_t gpio_in = {};
+        gpio_in.intr_type = GPIO_INTR_POSEDGE;
+        gpio_in.mode = GPIO_MODE_INPUT;
+        gpio_in.pin_bit_mask = GPIO_INPUT_POSEDGE_SEL;
+        gpio_in.pull_down_en = 1;
+        gpio_in.pull_up_en = 0;
+
+    gpio_config(&gpio_out);
+    gpio_config(&gpio_in);
     
-    mode_check();
+    mode_check(NULL);
     
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    gpio_isr_handler_add(GPIO_INPUT_SENS_1 , gpio_isr_handler, NULL);
-    gpio_isr_handler_add(GPIO_INPUT_SENS_2 , gpio_isr_handler, NULL);
-    gpio_isr_handler_add(GPIO_INPUT_BUTTON , gpio_isr_handler, NULL);
-    gpio_isr_handler_add(GPIO_INPUT_MODE_BUTTON , mode_check, NULL);
-    gpio_isr_handler_add(GPIO_INPUT_MODE_AUTO , mode_check, NULL);
-    gpio_isr_handler_add(GPIO_INPUT_MODE_WIFI , mode_check, NULL);
+    gpio_isr_handler_add(GPIO_INPUT_SENS_1 , gpio_isr_handler, (void*) GPIO_INPUT_SENS_1);
+    gpio_isr_handler_add(GPIO_INPUT_SENS_2 , gpio_isr_handler, (void*) GPIO_INPUT_SENS_2);
+    gpio_isr_handler_add(GPIO_INPUT_BUTTON , gpio_isr_handler, (void*) GPIO_INPUT_BUTTON);
+    gpio_isr_handler_add(GPIO_INPUT_MODE_BUTTON , mode_check, (void*) GPIO_INPUT_MODE_BUTTON);
+    gpio_isr_handler_add(GPIO_INPUT_MODE_AUTO , mode_check, (void*) GPIO_INPUT_MODE_AUTO);
+    gpio_isr_handler_add(GPIO_INPUT_MODE_WIFI , mode_check, (void*) GPIO_INPUT_MODE_WIFI);
 
     gpio_set_level(GPIO_OUTPUT_MOS, 0);
     gpio_set_level(GPIO_OUTPUT_LED_GR, 0);
@@ -248,24 +379,27 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    
+
+//WIFI
     wifi_init_softap();
+
     initi_web_page_buffer();
-    start_webserver();
     
+    start_webserver();
+//OLED
+    oled_init();
+    
+    oled_drawloading();
+ 
     while(1) {
         vTaskDelay(100 / portTICK_RATE_MS);
 
-        if (INT_TEST)
+        if (INT_TEST && false)
         {
             INT_TEST = false;
             INT_TEST_COUNTER ++;
             printf("INT_TEST %d\n", INT_TEST_COUNTER);
-        }
-
-        if (gpio_get_level(GPIO_INPUT_BUTTON) == 1)
-        {
-            gpio_set_level(GPIO_OUTPUT_FAN, 1);            
+            printf("pin %d\n", pin);
         }
 
         if (SPEED_PRINT)
@@ -292,48 +426,60 @@ void app_main(void)
             gpio_set_level(GPIO_OUTPUT_LED_GR, 0);
         }
 
-        adc_interval ++;
-        if (adc_interval == 25) 
-        {
-            adc_interval = 0;
-            if (ADC_SEL)
-            {
-                adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_1);
-                TERM_1_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
-                int TERM_1_R1 = TERM_1_V/1000.00*56000.00/(5-TERM_1_V/1000.00);
-                TERM_TEMP_1 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_1_R1/TERM_R0))-273;
-                ADC_SEL = false;
+        ADC_measure_temperature();
+        // adc_interval ++;
+        // if (adc_interval == 20) 
+        // {
+        //     adc_interval = 0;
+        //     if (ADC_SEL)
+        //     {
+        //         adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_1);
+        //         TERM_1_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
+        //         int TERM_1_R1 = TERM_1_V/1000.00*56000.00/(5-TERM_1_V/1000.00);
+        //         TERM_TEMP_1 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_1_R1/TERM_R0))-273;
+        //         ADC_SEL = false;
+        //     } else {
+        //         adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_2);
+        //         TERM_2_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
+        //         int TERM_2_R1 = TERM_2_V/1000.00*56000.00/(5-TERM_2_V/1000.00);
+        //         TERM_TEMP_2 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_2_R1/TERM_R0))-273;
+        //         ADC_SEL = true;
+        //     }
+        //     if (PRINT_TEMP){
+        //         printf(" COIL TEMP %d \t TERM_2 %d \n",TERM_TEMP_1,TERM_TEMP_2);
+        //     }
+        //     if (TERM_TEMP_1 > TERM_FAN_UP || TERM_TEMP_2 > TERM_FAN_UP)
+        //     {
+        //         //ESP_LOGI(TAG, "fan up");
+        //         gpio_set_level(GPIO_OUTPUT_FAN, 1);            
+        //     } else if (TERM_TEMP_1 < TERM_FAN_DOWN && TERM_TEMP_2 < TERM_FAN_DOWN) 
+        //     {
+        //         //ESP_LOGI(TAG, "fan down");
+        //         gpio_set_level(GPIO_OUTPUT_FAN, 0);
+        //     }
+        //     if (TERM_TEMP_1 > TERM_CRIT || TERM_TEMP_2 > TERM_CRIT)
+        //     {
+        //         //ESP_LOGI(TAG, "coil down");
+        //         TEMP_OVERLOAD = true;
+        //         gpio_set_level(GPIO_OUTPUT_LED_RED, 1);
+        //     } else if (TERM_TEMP_1 < TERM_NONCRIT && TERM_TEMP_2 < TERM_NONCRIT) 
+        //     {
+        //         //ESP_LOGI(TAG, "coil up");
+        //         TEMP_OVERLOAD = false;
+        //         gpio_set_level(GPIO_OUTPUT_LED_RED, 0);
+        //     }
+        // }
+
+        speed_reset_counter++;
+        if (speed_reset_counter == 10){
+            speed_reset_counter = 0;
+            if (speed == prev_speed){
+                speed = 0;
             } else {
-                adc_1_reading = adc1_get_raw((adc1_channel_t)ADC_2);
-                TERM_2_V = esp_adc_cal_raw_to_voltage(adc_1_reading, adc_chars);
-                int TERM_2_R1 = TERM_2_V/1000.00*56000.00/(5-TERM_2_V/1000.00);
-                TERM_TEMP_2 = 1/((1/(TERM_T0+273))+(1/TERM_BETA)*log(TERM_2_R1/TERM_R0))-273;
-                ADC_SEL = true;
-            }
-            if (PRINT_TEMP){
-                printf(" COIL TEMP %d \t TERM_2 %d \n",TERM_TEMP_1,TERM_TEMP_2);
-            }
-            if (TERM_TEMP_1 > TERM_FAN_UP || TERM_TEMP_2 > TERM_FAN_UP)
-            {
-                //ESP_LOGI(TAG, "fan up");
-                gpio_set_level(GPIO_OUTPUT_FAN, 1);            
-            } else if (TERM_TEMP_1 < TERM_FAN_DOWN && TERM_TEMP_2 < TERM_FAN_DOWN) 
-            {
-                //ESP_LOGI(TAG, "fan down");
-                gpio_set_level(GPIO_OUTPUT_FAN, 0);
-            }
-            if (TERM_TEMP_1 > TERM_CRIT || TERM_TEMP_2 > TERM_CRIT)
-            {
-                //ESP_LOGI(TAG, "coil down");
-                TEMP_OVERLOAD = true;
-                gpio_set_level(GPIO_OUTPUT_LED_RED, 1);
-            } else if (TERM_TEMP_1 < TERM_NONCRIT && TERM_TEMP_2 < TERM_NONCRIT) 
-            {
-                //ESP_LOGI(TAG, "coil up");
-                TEMP_OVERLOAD = false;
-                gpio_set_level(GPIO_OUTPUT_LED_RED, 0);
+                prev_speed = speed;
             }
         }
 
+        oled_loading_progress = oled_drawstats(MODE, oled_loading_progress);
     }
 }
