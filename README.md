@@ -1,1 +1,1 @@
-# Semester_project
+# Bachelor_project
