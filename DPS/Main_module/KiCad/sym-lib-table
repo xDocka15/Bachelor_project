@@ -1,0 +1,4 @@
+(sym_lib_table
+  (lib (name "esp32")(type "KiCad")(uri "${KIPRJMOD}/esp32.kicad_sym")(options "")(descr ""))
+  (lib (name "Heatsink")(type "KiCad")(uri "${KIPRJMOD}/Heatsink.kicad_sym")(options "")(descr ""))
+)

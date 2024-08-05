@@ -1,0 +1,1 @@
+V návrhu DPS nejsou provedeny změny popsané v kapitole 3.5.2

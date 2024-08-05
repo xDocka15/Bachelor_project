@@ -5,17 +5,16 @@ clc
 n = 0; % počítadlo kombinace
 y = []; % pro uložení kombinace
 z = 1;
-res = [];
 
 %% projede kombinace, uloží pouze okoli požadovaneho vykonu
-for N = 200:200:3000      % zavity 
-    for ls = 100:10:150     % delka civky 
-        for ti = 1:10       % čas impulzu 
-            for rv = 0.1:0.1:0.5 % poloměr vodiče 
-                [B,P]= civka_f_old(N,ls,ti,rv); % vypočet 
+for N = 100:100:3000      % zavity 
+    for ls = 70:10:100     % delka civky 
+        for ti = 5:5:30       % čas impulzu 
+            for rv = 0.1:0.1:1.0 % poloměr vodiče 
+                [B,P,~,res]= CivkaFunkce(N,ls,ti,rv,1); % vypočet 
                 if P >= 12 && P <= 16  % uloží if 12<P<16 
                     n = n+1;            % přičíst počítadlo 
-                    y(n,:) = [n,B,P,N,ls,ti,rv]; % uložit paramtery 
+                    y(n,:) = [n,B,P,N,ls,ti,rv,res.outer_diam]; % uložit paramtery 
                 end 
             end 
         end 
@@ -31,16 +30,16 @@ Bres = Bres/max(Bres); % normalizace
 Pres = Pres/max(Pres); % normalizace 
 
 figure; 
-plot(nres,(Bres./Pres)) % graf B/P
+plot(nres,(Bres./Pres),'o') % graf B/P
 title('B/P')
 xlabel('číslo měření')
 ylabel('B/P')
 
 %   z grafu se zjístí číslo kombinace vztupu, 
 %   které jsou zapsány v proměnné 'y' 
-
+res = [];
 for i = 1:n % ulozi vysledky pro nejlepší kombinace do res 
-    if (Bres(i,:)/Pres(i,:)) > 0.95 
+    if (Bres(i,:)/Pres(i,:)) > 0.8
         res(z,:) = y(i,:); 
         z = z+1; 
     end 
